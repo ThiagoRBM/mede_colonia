@@ -234,12 +234,11 @@ def salva_figura_eixos(
     informacoes_colonia,
     imagem_colonia_isolada,
     escala_px,
-    centros_bbox,
     placa_petri=9,
+    mostra_eixos=False,
 ):
     """Funcao que salva a imagem da colonia de fungos isolada do resto da
-    imagem, mostra os eixos que foram usados no cálculo da média, e uma barra
-    indicando o que é 1 cm na imagem.
+    imagem, com uma barra, indicando o que é 1 cm na imagem.
     Recebe:
     1. nome do arquivo com a imagem bruta
     2. imagem da colônia isolada (funcao 'get_colonia_fungo')
@@ -250,8 +249,14 @@ def salva_figura_eixos(
     5. o diâmetro, em cm, da placa de petri, o padrão é 9.
     A imagem é salva em um diretório dentro do diretório onde estão as
     imagens brutas, mantendo o nome com o sufixo "_colonia_eixos" aicionado.
+    Por padrão, os iexos usados nos cálculos não são mostrados na imagem salva,
+    mas caso 'mostra_eixos' for substituído para 'True', eles serão mostrados
+    na imagem salva também.
     """
 
+    caminho = os.path.join(
+        settings.DIRETORIO_TRATADAS, f"{arq}_colonia_eixos.png"
+    )
     barra_cm = escala_px / placa_petri
     shape_img = imagem_colonia_isolada.shape
     pos_y = shape_img[0] * 0.96
@@ -263,30 +268,32 @@ def salva_figura_eixos(
     plt.imshow(imagem_colonia_isolada)
     plt.axis("off")
 
-    plt.plot(
-        (
-            informacoes_colonia["inicio_fim_x"][0],
-            informacoes_colonia["inicio_fim_x"][1],
-        ),
-        (
-            informacoes_colonia["centro_bbox_y"],
-            informacoes_colonia["centro_bbox_y"],
-        ),
-        "r",
-        linewidth=1.0,
-    )
-    plt.plot(
-        (
-            informacoes_colonia["centro_bbox_x"],
-            informacoes_colonia["centro_bbox_x"],
-        ),
-        (
-            informacoes_colonia["inicio_fim_y"][0],
-            informacoes_colonia["inicio_fim_y"][1],
-        ),
-        "g",
-        linewidth=1.0,
-    )
+    if mostra_eixos == True:
+        plt.plot(
+            (
+                informacoes_colonia["inicio_fim_x"][0],
+                informacoes_colonia["inicio_fim_x"][1],
+            ),
+            (
+                informacoes_colonia["centro_bbox_y"],
+                informacoes_colonia["centro_bbox_y"],
+            ),
+            "r",
+            linewidth=1.0,
+        )
+        plt.plot(
+            (
+                informacoes_colonia["centro_bbox_x"],
+                informacoes_colonia["centro_bbox_x"],
+            ),
+            (
+                informacoes_colonia["inicio_fim_y"][0],
+                informacoes_colonia["inicio_fim_y"][1],
+            ),
+            "g",
+            linewidth=1.0,
+        )
+
     plt.annotate(
         "1 cm",
         (pos_x, pos_y - 5),
@@ -301,9 +308,11 @@ def salva_figura_eixos(
         "w",
         linewidth=1.5,
     )
-    print("salva eixos")
+
+    print(f"imagem da colônia, com escala, salva em:\n{caminho}")
+
     return plt.savefig(
-        os.path.join(settings.DIRETORIO_TRATADAS, f"{arq}_colonia_eixos.png"),
+        caminho,
         bbox_inches="tight",
         pad_inches=0,
         dpi=300,
@@ -318,15 +327,34 @@ def diametro_colonia_cm(arq, eixos_centrais_colonia, escala_px, placa_petri=9):
     o apenas um valor de eixo também, ao invés de 2.
     3. escala em pixels (funcao 'get_escala_pixel'),
     4. o diâmetro da placa de petri **em cm** (valor padrão para é de 9 cm).
-    A faunção calcula um valor médio para o diâmetro, em cm, da colônia.
-    Média baseada nos valores dos eixos maior e menor.
-    Retorna um dicionário com o nome do arquivo e o diâmetro da colônia.
+    A função calcula um valor médio para o diâmetro, em cm, da colônia.
+    Retorna um dicionário com o nome do arquivo, o diâmetro no eixo x,
+    diâmetro no eixo y e a média do diâmetro dos eixos da colônia.
     """
 
     if type(eixos_centrais_colonia) is not list:
         eixos_centrais_colonia = [eixos_centrais_colonia]
 
-    med_eixos = sum(eixos_centrais_colonia) / len(eixos_centrais_colonia)
-    diametro_colonia_cm = round(placa_petri * med_eixos / escala_px, 2)
+    eixos_cm = []
+    for eixo in eixos_centrais_colonia:
+        diametro_colonia_cm = round(placa_petri * eixo / escala_px, 2)
+        eixos_cm.append(diametro_colonia_cm)
 
-    return {arq: diametro_colonia_cm}
+    med_eixos = [round(sum(eixos_cm) / len(eixos_centrais_colonia), 2)]
+
+    return {
+        "placa": arq,
+        "eixo_x": eixos_cm[0],
+        "eixo_y": eixos_cm[1],
+        "media": med_eixos,
+    }
+
+
+def info_list_to_df(lista_diametro):
+    """Funcao que recebe um dicionário com as informações sobre a colônia
+    (por enquanto, diâmetro de eixos e diâmetro médio), transforma em um
+    pd DataFrame e salva em um arquivo '.csv'.
+    """
+    df = pd.DataFrame.from_dict(lista_diametro)
+
+    return df
