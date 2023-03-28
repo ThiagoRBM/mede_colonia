@@ -2,13 +2,9 @@ import glob
 import cv2
 import numpy as np
 from skimage import measure
-
 import os
 import settings
 import matplotlib.pyplot as plt
-import math
-import re
-from PIL import Image
 import pandas as pd
 
 
@@ -56,9 +52,37 @@ def salva_img(img, diretorio, nome_img):
     return 1
 
 
-def get_escala_pixel(foto_bruta):
+def informacoes_canais_cores(img):
+    """Funcao para calcular o histograma dos 3 canais da imagem bruta.
+    Recebe uma imagem bruta e retorna informações sobre cada uma dos canais,:
+        1. Desvio padrão de cada canal
+        2. Média de cada canal
+    Retorna uma lista de listas, na sequência B, G, R.
+    """
+
+    canais = cv2.split(img)
+
+    cores = ("b", "g", "r")
+    infos = []
+    for (canal, cor) in zip(canais, cores):
+        # hist = cv2.calcHist([canal], [0], None, [256], [0, 256])
+        img_1d = np.reshape(canal[:, :], -1)
+        # passando a imagem no canal de 2D para 1D, para calcular
+        # as características
+        img_1d_med = np.mean(img_1d)
+        img_1d_sd = np.std(img_1d)
+
+        infos.append([img_1d_med, img_1d_sd])
+
+    return infos
+
+
+def get_escala_pixel(foto_bruta, info_canais):
     """Funcao que recebe uma imagem de uma foto de fungo em placa de petri.
-    Ela binariza a imagem de modo a pegar a placa de petri.
+    Ela binariza a imagem de modo a pegar a placa de petri. Recebe
+    as informações sobre os canas (funcao 'informacoes_canais_cores') e
+    'decide' qual banda usar para a binarização de acordo com o canal com maior
+    desvio padrão.
     Após a binarização, ela considera o objeto com maior eixo como sendo a
     placa de petri.
     Uma média do maior e menor eixo é calculada, para tentar diminuir erros.
@@ -70,7 +94,11 @@ def get_escala_pixel(foto_bruta):
     retirado (essa nova imagem pode ser útil para detectar problemas
     no script, não será usada a princípio)
     """
-    banda_vermelha = foto_bruta[:, :, 2]
+
+    bandas = sorted(info_canais, key=lambda x: x[1], reverse=True)[0]
+    banda = [(i, val) for i, val in enumerate(info_canais) if val == bandas]
+
+    banda_vermelha = foto_bruta[:, :, banda[0][0]]
     banda_vermelha = cv2.GaussianBlur(banda_vermelha, (5, 5), 0)
 
     ## primeira binarização (definir placa de petri e escala)
@@ -93,6 +121,7 @@ def get_escala_pixel(foto_bruta):
 
     img_petri = np.zeros_like(foto_bruta)
     mask = np.isin(img_limpa_2, placa_petri[0])
+
     # mantendo só o que é o maior objeto
     img_petri[mask] = foto_bruta[mask]
 
@@ -118,8 +147,8 @@ def get_colonia_fungo(foto_bruta, arq):
         2. Um dicionário contendo a própria imagem salva e a imagem
         binarizada é retornado
     """
+
     img_limpa_azul = foto_bruta[:, :, 0]
-    # img_limpa_azul = cv2.cvtColor(foto_bruta, cv2.COLOR_BGR2GRAY)
     img_limpa_azul = cv2.GaussianBlur(img_limpa_azul, (5, 5), 0)
     _, binarizada_otsu_2 = cv2.threshold(
         img_limpa_azul, 0, 255, cv2.THRESH_OTSU
@@ -159,13 +188,10 @@ def get_colonia_fungo(foto_bruta, arq):
     colonia_info = {
         "obj": eixos_ord[1][0],
         "area": eixos_ord[1][1],
-        # "eixo_maior": eixos_ord[1][2],
-        # "eixo_menor": eixos_ord[1][3],
         "centroide_colonia": eixos_ord[1][4],
-        # "orientation": eixos_ord[1][5],
         "bbox_colonia": eixos_ord[1][5],
     }
-    # breakpoint()
+
     # pega o objeto que é a colônia do fungo. ATENÇÃO, o fungo vai ter o segundo
     # maior eixo da imagem, porque o primeiro é o da placa de petri
     colonia_img = np.zeros_like(foto_bruta)
@@ -358,3 +384,58 @@ def info_list_to_df(lista_diametro):
     df = pd.DataFrame.from_dict(lista_diametro)
 
     return df
+
+
+def processa_colonias(caminho_imagens_brutas):
+    """Funcao que recebe uma lista com o caminho para o diretório onde estão
+    as imagens brutas (o caminho vem do arquivo '.json') e roda as funções
+    acima em sequência.
+    """
+    caminhos = get_colonias_caminho(caminho_imagens_brutas)
+
+    infos_colonias = []
+    for img in caminhos:
+        arq = os.path.basename(img).replace(".jpg", "")
+        imagem = abre_img(img)
+
+        cores = informacoes_canais_cores(imagem)
+        escala, img_limpa_1 = get_escala_pixel(imagem, cores)
+
+        colonia_fungo = get_colonia_fungo(imagem, arq)
+
+        eixos_bbox = get_eixos_x_y(
+            colonia_fungo["colonia_bin"], colonia_fungo["dict_colonia"]
+        )
+
+        diametro_colonia = diametro_colonia_cm(
+            arq,
+            [eixos_bbox["diametro_eixo_x"], eixos_bbox["diametro_eixo_y"]],
+            escala,
+            9,
+        )
+
+        df_info = info_list_to_df(diametro_colonia)
+
+        salva_figura_eixos(
+            arq,
+            eixos_bbox,
+            colonia_fungo["colonia_rgb"],
+            escala,
+            9,
+            mostra_eixos=False,
+        )
+
+        infos_colonias.append(df_info)
+
+        print(f"imagem {arq} processada")
+
+    infos_colonias.to_csv(
+        os.path.join(settings.DIRETORIO, "diametros.csv"),
+        sep=";",
+        index=False,
+    )
+
+    print(
+        f"Arquivo com os diâmetros das colônias salvo em:\
+          \n{settings.DIRETORIO}, como 'diametros.csv'\n\n"
+    )
